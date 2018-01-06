@@ -1,4 +1,4 @@
-#ifndef VARIANT_H
+﻿#ifndef VARIANT_H
 #define VARIANT_H
 
 #include <type_traits>
@@ -11,6 +11,8 @@ namespace vr {
 
 using std::cerr;
 using std::endl;
+
+template<typename... Ts> struct my_variant;
 
 namespace details {
 
@@ -36,14 +38,26 @@ namespace details {
         struct __first_type<T, Ts...> {
             using type = T;
         };
+
+        template<typename T>
+        struct is_my_variant {
+            static const bool value = false;
+        };
+
+        template<template <typename... > typename C, typename... Ts>
+        struct is_my_variant<C<Ts...>> {
+            static const bool value = std::is_same<C<Ts...>, my_variant<Ts...>>::value;
+        };
+
+
     }
 
-    namespace visit {
+    namespace visit_details {
 
         template<typename Visitor,	typename T>
         using __visit_type_for_element = decltype(std::declval<Visitor>()(std::declval<T>()));
 
-        struct __empty_result_type {};
+        struct __empty_result_type;
 
         template<typename Result, typename Visitor, typename... Ts>
         struct __visit_result_impl {
@@ -66,8 +80,8 @@ using max_types_align = details::utility::__variant_max<alignof(Ts)...>;
 template<typename... Ts>
 using first_type = details::utility::__first_type<Ts...>;
 
-template<typename R, typename Visitor, typename...	Ts>
-using visit_result = typename details::visit::__visit_result_impl<R, Visitor, Ts...>::type;
+template<typename Result, typename Visitor, typename...	Ts>
+using visit_result = typename details::visit_details::__visit_result_impl<Result, Visitor, Ts...>::type;
 
 template<typename... Ts>
 struct index_of_type {
@@ -81,14 +95,12 @@ struct index_of_type<T, F, Rest...> {
 
 template<typename Result, typename Variant, typename Visitor, typename First, typename... Rest>
 Result visit_impl(Variant&& variant, Visitor&& visitor, std::tuple<First, Rest...>) {
-    if (variant.template is<First>()) {
+    if (variant.template holds_alternative<First>()) {
         return static_cast<Result>(std::forward<Visitor>(visitor)(std::forward<Variant>(variant).template get<First>()));
     } else if constexpr (sizeof...(Rest) > 0) {
         return	visit_impl<Result>(std::forward<Variant>(variant), std::forward<Visitor>(visitor), std::tuple<Rest...>());
     }
 }
-
-template<typename... Ts> struct my_variant;
 
 template<typename... Ts>
 struct my_variant_storage {
@@ -114,7 +126,6 @@ private:
 
 };
 
-
 template<typename T, typename... Ts>
 struct my_variant_helper {
 
@@ -127,7 +138,7 @@ struct my_variant_helper {
         get_derived().set_index(id);
     }
 
-    my_variant_helper(T&& other) {
+    my_variant_helper(const T&& other) {
         new (get_derived().get_storage_pointer()) T(std::move(other));
         get_derived().set_index(id);
     }
@@ -164,7 +175,7 @@ struct my_variant_helper {
 
 protected:
 
-    static constexpr size_t id = index_of_type<T, Ts...>::value;
+    constexpr static size_t id = index_of_type<T, Ts...>::value;
 
 private:
 
@@ -182,59 +193,98 @@ struct my_variant : private my_variant_storage<Ts...>, private my_variant_helper
     template<typename T, typename... Os>
     friend struct my_variant_helper;
 
-//    using my_variant_helper<int, Ts...>::my_variant_helper;
+//    using my_variant_helper<int, Ts...>:_variant_helper;
 //    using my_variant_helper<std::string, Ts...>::my_variant_helper;
 //    using my_variant_helper<char, Ts...>::my_variant_helper;
+
+    using vr::my_variant_helper<Ts, Ts...>::my_variant_helper...;
 
     /// constructors ///
     my_variant() :
         my_variant_helper<typename first_type<Ts...>::type, Ts...>(typename first_type<Ts...>::type()) {}
 
     my_variant(my_variant const& other) {
-        (my_variant_helper<typename std::remove_cv<typename std::remove_reference<decltype(other.get<Ts>())>::type>::type, Ts...>::operator =(other),...);
+        other.visit([&](auto const& value) {
+            *this = value;
+        });
+//        (my_variant_helper<typename std::remove_cv<typename std::remove_reference<decltype(other.get<Ts>())>::type>::type, Ts...>::operator =(other),...);
     }
 
     my_variant(my_variant&& other) {
-        (my_variant_helper<typename std::remove_cv<typename std::remove_reference<decltype(other.get<Ts>())>::type>::type, Ts...>::operator =(std::move(other)),...);
+        other.visit([&](auto const& value) {
+            *this = value;
+        });
+//        (my_variant_helper<typename std::remove_cv<typename std::remove_reference<decltype(other.get<Ts>())>::type>::type, Ts...>::operator =(std::move(other)),...);
     }
 
     template<typename... Rs>
-    my_variant(my_variant<Rs...> const& other);
+    my_variant(my_variant<Rs...> const& other) {
+        other.visit([&](auto const& value) {
+//            cerr << typeid(decltype(*this)).name() << endl;
+//            cerr << typeid(decltype(other)).name() << endl;
+            *this = value;
+        });
+    }
 
     template<typename... Rs>
     my_variant(my_variant<Rs...>&& other);
 
-    template<typename T>
-    my_variant(T&& other)
-        : my_variant_helper<T, Ts...>(std::forward<T>(other)) {}
+//    template<typename T, typename = typename std::enable_if<!details::utility::is_my_variant<typename std::remove_cv<typename std::remove_reference<T>::type>::type>::value>::type>
+//    my_variant(T&& other)
+//        : this->template my_variant_helper<T, Ts...>(std::forward<T>(other)) {}
 
-    /// assignment ///
-    using my_variant_helper<Ts, Ts...>::operator =...;
 
     /// explore ///
-    template<typename T> bool is() const {
-        return this->get_index() == my_variant_helper<T, Ts...>::id;
+    template<typename T> bool holds_alternative() const {
+//        using this->my_variant_helper<T, Ts...>::id;
+        return this->get_index() == vr::my_variant_helper<T, Ts...>::id;
     }
 
     template<typename T> T& get() {
-        assert(is<T>());
+        assert(holds_alternative<T>());
         return *this->template get_storage_pointer<T>();
     }
 
     template<typename T> T const& get() const {
-        assert(is<T>());
+        assert(holds_alternative<T>());
         return *this->template get_storage_pointer<T>();
     }
 
-    template<typename Result = details::visit::__empty_result_type, typename Visitor>
+    size_t index() const noexcept {
+        return this->get_index();
+    }
+
+    /// visits ///
+    template<typename Visitor, typename Result = details::visit_details::__empty_result_type>
     visit_result<Result, Visitor, Ts...> visit(Visitor&& visitor)	{
             using Result_type = visit_result<Result, Visitor, Ts...>;
             return visit_impl<Result_type>(*this, std::forward<Visitor>(visitor), std::tuple<Ts...>());
     }
 
+    template<typename Visitor, typename Result = details::visit_details::__empty_result_type>
+    visit_result<Result, Visitor, Ts const...> visit(Visitor&& visitor) const {
+            using Result_type = visit_result<Result, Visitor, Ts const...>;
+            return vr::visit_impl<Result_type>(*this, std::forward<Visitor>(visitor), std::tuple<Ts...>());
+    }
+
+    /// assignment ///
+    using vr::my_variant_helper<Ts, Ts...>::operator =...;
+
+    my_variant& operator =(my_variant const& other) {
+        other.visit([&](auto const& value) {
+            *this = value;
+        });
+    }
+
+    my_variant& operator =(my_variant&& other) {
+        other.visit([&](const auto&& value) {
+            *this = std::move(value);
+        });
+    }
+
     void destroy() {
 //        cerr << "here" << endl;
-        (my_variant_helper<Ts, Ts...>::destroy(),...);
+        (vr::my_variant_helper<Ts, Ts...>::destroy(),...);
         this->set_index(sizeof...(Ts));
     }
 
@@ -243,8 +293,6 @@ struct my_variant : private my_variant_storage<Ts...>, private my_variant_helper
     }
 
 };
-
-
 
 //             template<typename _Visitor, typename... _Variants>
 //               constexpr decltype(auto)
