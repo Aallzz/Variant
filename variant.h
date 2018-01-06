@@ -2,107 +2,270 @@
 #define VARIANT_H
 
 #include <type_traits>
+#include <iostream>
+#include <new>
+#include <utility>
+#include <string>
+
+namespace vr {
+
+using std::cerr;
+using std::endl;
 
 namespace details {
-    template<size_t a, size_t... b>
-    struct __variant_max {};
 
-    template<size_t sz>
-    struct __variant_max<sz> {
-        static const size_t value = sz;
-    };
+    namespace utility {
 
-    template<size_t sz1, size_t sz2, size_t... rest>
-    struct __variant_max<sz1, sz2, rest...> {
-        static const size_t value = sz1 > sz2 ? __variant_max<sz1, rest...>::value : __variant_max<sz2, rest...>::value;
-    };
+        template<size_t a, size_t... b>
+        struct __variant_max {};
 
-    template<typename... T>
-    using max_types_size = __variant_max<sizeof(T)...>;
+        template<size_t sz>
+        struct __variant_max<sz> {
+            static const size_t value = sz;
+        };
 
-    template<typename... T>
-    using max_types_align = __variant_max<alignof(T)...>;
+        template<size_t sz1, size_t sz2, size_t... rest>
+        struct __variant_max<sz1, sz2, rest...> {
+            static const size_t value = sz1 > sz2 ? __variant_max<sz1, rest...>::value : __variant_max<sz2, rest...>::value;
+        };
 
+        template<typename... Ts>
+        struct __first_type;
 
+        template<typename T, typename... Ts>
+        struct __first_type<T, Ts...> {
+            using type = T;
+        };
+    }
 
-    template<typename... Ts>
-    struct index_of_type {
-        static constexpr size_t value = 0;
-    };
+    namespace visit {
 
-    template<typename T, typename F, typename... Rest>
-    struct index_of_type<T, F, Rest...> {
-        static constexpr size_t value = std::integral_constant<size_t, std::is_same<T, F>::value ? 0 : index_of_type<T, Rest...>::value + 1> {};
-    };
+        template<typename Visitor,	typename T>
+        using __visit_type_for_element = decltype(std::declval<Visitor>()(std::declval<T>()));
 
+        struct __empty_result_type {};
 
-    void __variant_destroy(size_t, void*) {}
+        template<typename Result, typename Visitor, typename... Ts>
+        struct __visit_result_impl {
+            using type = Result;
+        };
 
-    template<typename T, typename... Ts>
-    void __variant_destroy(size_t type_id, void* pdata) {
-        if (type_id == typeid(T).hash_code())
-            reinterpret_cast<T*>(pdata)->~T();
-        else
-            __variant_destroy<Ts...>(type_id, pdata);
+        template<typename Visitor, typename... Ts>
+        struct __visit_result_impl<__empty_result_type, Visitor, Ts...> {
+            using type = typename std::common_type<__visit_type_for_element<Visitor, Ts>...>::type;
+        };
     }
 }
 
 template<typename... Ts>
-struct variant {
+using max_types_size = details::utility::__variant_max<sizeof(Ts)...>;
 
+template<typename... Ts>
+using max_types_align = details::utility::__variant_max<alignof(Ts)...>;
 
-    static_assert(!(std::is_void_v<Ts> || ...), "variant must have no void alternative");
+template<typename... Ts>
+using first_type = details::utility::__first_type<Ts...>;
 
-    variant() {}
+template<typename R, typename Visitor, typename...	Ts>
+using visit_result = typename details::visit::__visit_result_impl<R, Visitor, Ts...>::type;
 
-    variant(variant const& other)
-        : _type_id(other._type_od), _data(other._data) {}
+template<typename... Ts>
+struct index_of_type {
+    static constexpr size_t value = 0;
+};
 
-    variant(variant&& other)
-        : _type_id(other._type_id), _data(other.data) {
-        other.type_id = typeid(void).hash_code();
-        other.destroy();
+template<typename T, typename F, typename... Rest>
+struct index_of_type<T, F, Rest...> {
+    static constexpr size_t value = std::integral_constant<size_t, std::is_same<T, F>::value ? 0 : index_of_type<T, Rest...>::value + 1> {};
+};
+
+template<typename Result, typename Variant, typename Visitor, typename First, typename... Rest>
+Result visit_impl(Variant&& variant, Visitor&& visitor, std::tuple<First, Rest...>) {
+    if (variant.template is<First>()) {
+        return static_cast<Result>(std::forward<Visitor>(visitor)(std::forward<Variant>(variant).template get<First>()));
+    } else if constexpr (sizeof...(Rest) > 0) {
+        return	visit_impl<Result>(std::forward<Variant>(variant), std::forward<Visitor>(visitor), std::tuple<Rest...>());
     }
+}
 
-    bool is_valueless() {
-        return _type_id == typeid(void).hash_code();
-    }
+template<typename... Ts> struct my_variant;
 
-    variant& operator = (variant const& rhs) {
-        if (is_valueless() && rhs.is_valueless()) return *this;
-        if (rhs.is_valueless()) {
-            destroy();
-            return *this;
-        }
-        if (_type_id == rhs._type_id) {
-            _data = rhs._data;
-            return *this;
-        }
-        variant temp(rhs);
-        std::swap(_type_id, temp._type_id);
-        std::swap(_data, temp._data);
-    }
+template<typename... Ts>
+struct my_variant_storage {
 
-    template<typename T, typename = std::enable_if<details::index_of_type<T, Ts...>::value != sizeof...(Ts), void>>
-    variant& operator = (T&& rhs) {
-        if (is_valueless()) {
-            _type_id = typeid(T).hash_code();
-        }
-    }
+    size_t get_index() const { return _id; }
+    void set_index(int id) {_id = id; }
+    void* get_storage_pointer() {return &_data; }
+    void const* get_storage_pointer() const {return &_data; }
+    template<typename T>
+    T* get_storage_pointer() {return std::launder(reinterpret_cast<T*>(&_data)); }
+    template<typename T>
+    T const* get_storage_pointer() const {return std::launder(reinterpret_cast<T const*>(&_data)); }
+    //https://miyuki.github.io/2016/10/21/std-launder.html
 
-    static const size_t _size = details::max_types_size<Ts...>::value;
-    static const size_t _align = details::max_types_align<Ts...>::value;
+private:
 
+    static constexpr size_t _size = max_types_size<Ts...>::value;
+    static constexpr size_t _align = max_types_align<Ts...>::value;
     using type = typename std::aligned_storage<_size, _align>::type;
 
-    std::size_t _type_id {typeid(void).hash_code()};
     type _data;
+    size_t _id;
+
+};
+
+
+template<typename T, typename... Ts>
+struct my_variant_helper {
+
+    using Derived = my_variant<Ts...>;
+
+    my_variant_helper() {}
+
+    my_variant_helper(T const& other) {
+        new (get_derived().get_storage_pointer()) T(other);
+        get_derived().set_index(id);
+    }
+
+    my_variant_helper(T&& other) {
+        new (get_derived().get_storage_pointer()) T(std::move(other));
+        get_derived().set_index(id);
+    }
+
+    bool destroy() {
+        if (get_derived().get_index() == id) {
+            get_derived().template get_storage_pointer<T>()->~T();
+            return true;
+        }
+        return false;
+    }
+
+    Derived& operator =(T const& other) {
+        if (get_derived().get_index() == id) {
+            *get_derived().template get_storage_pointer<T>() = other;
+        } else {
+            get_derived().destroy();
+            new (get_derived().get_storage_pointer()) T(other);
+            get_derived().set_index(id);
+        }
+        return get_derived();
+    }
+
+    Derived& operator =(T&& other) {
+        if (get_derived().get_index() == id) {
+            *get_derived().template get_storage_pointer<T>() = std::move(other);
+        } else {
+            get_derived().destroy();
+            new (get_derived().get_storage_pointer()) T(std::move(other));
+            get_derived().set_index(id);
+        }
+        return get_derived();
+    }
+
+protected:
+
+    static constexpr size_t id = index_of_type<T, Ts...>::value;
+
+private:
+
+    Derived& get_derived() {return *static_cast<Derived*>(this); }
+    Derived const& get_derived() const {return *static_cast<Derived const*>(this); }
+
+};
+
+template<typename... Ts>
+struct my_variant : private my_variant_storage<Ts...>, private my_variant_helper<Ts, Ts...>... {
+
+    static_assert(sizeof...(Ts) > 0, "my_variant needs more than zero type arguments");
+    static_assert(std::is_default_constructible<typename first_type<Ts...>::type>::value, "first type is needed to be deafult constuctable");
+
+    template<typename T, typename... Os>
+    friend struct my_variant_helper;
+
+//    using my_variant_helper<int, Ts...>::my_variant_helper;
+//    using my_variant_helper<std::string, Ts...>::my_variant_helper;
+//    using my_variant_helper<char, Ts...>::my_variant_helper;
+
+    /// constructors ///
+    my_variant() :
+        my_variant_helper<typename first_type<Ts...>::type, Ts...>(typename first_type<Ts...>::type()) {}
+
+    my_variant(my_variant const& other) {
+        (my_variant_helper<typename std::remove_cv<typename std::remove_reference<decltype(other.get<Ts>())>::type>::type, Ts...>::operator =(other),...);
+    }
+
+    my_variant(my_variant&& other) {
+        (my_variant_helper<typename std::remove_cv<typename std::remove_reference<decltype(other.get<Ts>())>::type>::type, Ts...>::operator =(std::move(other)),...);
+    }
+
+    template<typename... Rs>
+    my_variant(my_variant<Rs...> const& other);
+
+    template<typename... Rs>
+    my_variant(my_variant<Rs...>&& other);
+
+    template<typename T>
+    my_variant(T&& other)
+        : my_variant_helper<T, Ts...>(std::forward<T>(other)) {}
+
+    /// assignment ///
+    using my_variant_helper<Ts, Ts...>::operator =...;
+
+    /// explore ///
+    template<typename T> bool is() const {
+        return this->get_index() == my_variant_helper<T, Ts...>::id;
+    }
+
+    template<typename T> T& get() {
+        assert(is<T>());
+        return *this->template get_storage_pointer<T>();
+    }
+
+    template<typename T> T const& get() const {
+        assert(is<T>());
+        return *this->template get_storage_pointer<T>();
+    }
+
+    template<typename Result = details::visit::__empty_result_type, typename Visitor>
+    visit_result<Result, Visitor, Ts...> visit(Visitor&& visitor)	{
+            using Result_type = visit_result<Result, Visitor, Ts...>;
+            return visit_impl<Result_type>(*this, std::forward<Visitor>(visitor), std::tuple<Ts...>());
+    }
 
     void destroy() {
-        if (is_valueless()) return ;
-        details::__variant_destroy(_type_id, &_data);
-        type_id = typeid(void).hash_code();
+//        cerr << "here" << endl;
+        (my_variant_helper<Ts, Ts...>::destroy(),...);
+        this->set_index(sizeof...(Ts));
+    }
+
+    ~my_variant() {
+        destroy();
     }
 
 };
+
+
+
+//             template<typename _Visitor, typename... _Variants>
+//               constexpr decltype(auto)
+//               visit(_Visitor&& __visitor, _Variants&&... __variants)
+//               {
+//                 if ((__variants.valueless_by_exception() || ...))
+//               __throw_bad_variant_access("Unexpected index");
+
+//                 using _Result_type =
+//               decltype(std::forward<_Visitor>(__visitor)(
+//                   get<0>(std::forward<_Variants>(__variants))...));
+
+//                 constexpr auto& __vtable = __detail::__variant::__gen_vtable<
+//               _Result_type, _Visitor&&, _Variants&&...>::_S_vtable;
+
+//                 auto __func_ptr = __vtable._M_access(__variants.index()...);
+//                 return (*__func_ptr)(std::forward<_Visitor>(__visitor),
+//                          std::forward<_Variants>(__variants)...);
+//               }
+
+}
+
+
 #endif // VARIANT_H

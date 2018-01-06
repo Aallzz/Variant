@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.8)
 
 project(Variant)
-add_executable(${PROJECT_NAME} main.cpp variant.h temp_variant.h)
+add_executable(${PROJECT_NAME} main.cpp variant.h)
 
 add_definitions(-DAlex_PKZDL=1)
 add_definitions(-DTiliTim=1)
