@@ -110,9 +110,9 @@ struct my_variant_storage {
     void* get_storage_pointer() {return &_data; }
     void const* get_storage_pointer() const {return &_data; }
     template<typename T>
-    T* get_storage_pointer() {return std::launder(reinterpret_cast<T*>(&_data)); }
+    T* get_storage_pointer() {return reinterpret_cast<T*>(&_data); }
     template<typename T>
-    T const* get_storage_pointer() const {return std::launder(reinterpret_cast<T const*>(&_data)); }
+    T const* get_storage_pointer() const {return reinterpret_cast<T const*>(&_data); }
     //https://miyuki.github.io/2016/10/21/std-launder.html
 
 private:

@@ -16,10 +16,6 @@ struct X {
 
 my_variant<int, char, double> w;
 
-
-
-
-
 int main() {
 
 
