@@ -62,7 +62,7 @@ template <size_t I, class T>
 using variant_alternative_t = typename variant_alternative<I, T>::type;
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///     std::get(std::variant) called with an index or type that does not match the currently active alternative
+///     std::get(variant) called with an index or type that does not match the currently active alternative
 ///     std::visit called to visit a variant that is valueless_by_exception
 
 class bad_variant_access : public std::exception {};
@@ -289,14 +289,15 @@ namespace details {
     namespace visitor {
 
         struct storage_base_helper {
+
             template<typename T>
             constexpr static const T& at(T const& value) {
                 return value;
             }
 
             template<std::size_t N, typename T, typename... RestCoordinates>
-            constexpr static const T& at(std::array<T, N> const& ar, std::size_t x, RestCoordinates... rest_coordinates) {
-                return at(ar[x], rest_coordinates...);
+            constexpr static auto const& at(std::array<T, N> const& ar, std::size_t x, RestCoordinates... rest_coordinates) {
+                   return at(ar[x], rest_coordinates...);
             }
 
             template <typename F, typename... Fs>
@@ -319,13 +320,19 @@ namespace details {
 
             template<typename... Fs, typename res_t = std::array<std::common_type_t<std::decay_t<Fs>...>, sizeof...(Fs)>>
             constexpr static res_t make_farray(Fs&&... fs) {
-                return res_t({std::forward<Fs>(fs)...});
+                return res_t{{std::forward<Fs>(fs)...}};
             }
 
             template<typename F, typename... Vs, std::size_t... Is>
-            constexpr static decltype(auto) make_visit(std::index_sequence<Is...>) {
-                return (visit_agency<Is...>::template visitor<F, Vs...>::visit);
+            constexpr static auto make_visit(std::index_sequence<Is...>) {
+                return visit_agency<Is...>::template visitor<F, Vs...>::visit;
             }
+
+            template<int N>
+            struct print_size_as_warning
+            {
+               char operator()() { return N + 256; } //deliberately causing overflow
+            };
 
             /// просто костыль
             template<std::size_t id, typename T>
@@ -350,12 +357,13 @@ namespace details {
             }
 
             template<typename F, typename... Vs, typename Is>
-            constexpr static decltype(auto) make_f_matrix_impl(Is is) {
+            constexpr static auto make_f_matrix_impl(Is is) {
                 return make_visit<F, Vs...>(is);
             }
 
             template<typename F, typename... Vs, std::size_t... Is, std::size_t... IAs, typename... RestIS>
-            constexpr static decltype(auto) make_f_matrix_impl(std::index_sequence<Is...>, std::index_sequence<IAs...>, RestIS... rest) {
+            constexpr static auto make_f_matrix_impl(std::index_sequence<Is...>, std::index_sequence<IAs...>, RestIS... rest) {
+//                print_size_as_warning<sizeof...(RestIS)>()();
                 return make_farray(make_f_matrix_impl<F, Vs...>(std::index_sequence<Is..., IAs>{}, rest...)...);
             }
 
@@ -393,61 +401,71 @@ namespace details {
         /// 1) Строим что-то вроде главной диагонали с координатами 000, 111 и тп
         /// 2) Аналогично находим нужную ячейку, функцию которой вызовем
         ///
+
         template<typename Visitor, typename... Vs>
         constexpr static decltype(auto) visit_alt_at(std::size_t index, Visitor&& visitor, Vs&&... vs) {
-            return storage_base_helper::at(fdiagonal<Visitor&&, decltype(std::forward<Vs>(vs))...>::value, index)(std::forward<Visitor>(visitor), std::forward<Vs>(vs)...);
+            return storage_base_helper::at(fdiagonal<Visitor&&, decltype(std::forward<Vs>(vs))...>::value, index)
+                                         (std::forward<Visitor>(visitor), std::forward<Vs>(vs)...);
         }
 
         template<typename Visitor, typename... Vs>
         constexpr static decltype(auto) visit_alt(Visitor&& visitor, Vs&&... vs) {
-            return storage_base_helper::at(fmatrix<Visitor&&, decltype(std::forward<Vs>(vs))...>::value, vs.index()...)(std::forward<Visitor>(visitor), std::forward<Vs>(vs)...);
+            auto x = storage_base_helper::at(fmatrix<Visitor&&, decltype(std::forward<Vs>(vs))...>::value, vs.index()...);
+            return x(std::forward<Visitor>(visitor), std::forward<Vs>(vs)...);
         }
-                                                                                                                                    /// TODO CHECK IF INOKE CALL IS POSSIBLE
-        template<typename Visitor, typename... Vs>                                                                                                                        \
-        struct visit_with_check {
-            //static_assect(chech_invoke, "impossible to invoke");
-            constexpr decltype(auto) operator()(Visitor&& visitor, Vs&&... values) const {
-                return std::invoke(std::forward<Visitor>(visitor), std::forward<Vs>(values)...);
+
+
+        struct variant_helper {
+
+            template<typename Visitor, typename... Vs>                                                                                                                        \
+            struct visit_with_check {
+                //static_assect(chech_invoke, "impossible to invoke");
+                constexpr decltype(auto) operator()(Visitor&& visitor, Vs&&... values) const {
+                    return std::invoke(std::forward<Visitor>(visitor), std::forward<Vs>(values)...);
+                }
+            };
+
+
+            template<typename Visitor>
+            struct value_visitor {
+                Visitor&& visitor;
+
+                constexpr value_visitor(Visitor&& v) : visitor(std::forward<Visitor>(v)) {}
+
+                template<typename... Alts>
+                constexpr decltype(auto) operator()(Alts&&... alts) const {
+                    return visit_with_check<Visitor,
+                                            decltype((std::forward<Alts>(alts).value))...
+                            >()(std::forward<Visitor>(visitor), std::forward<Alts>(alts).value...);
+                }
+            };
+
+            template<typename Visitor>
+            constexpr static decltype(auto) make_value_visitor(Visitor&& value) {
+                return value_visitor<Visitor>(std::forward<Visitor>(value));
+            }
+
+
+            template<typename Visitor, typename... Vs>
+            constexpr static decltype(auto) visit_variant_at(std::size_t index, Visitor&& visitor, Vs&&... vs) {
+                return visit_alt_at(index, std::forward<Visitor>(visitor), std::forward<Vs>(vs).storage...);
+            }
+
+            template<typename Visitor, typename... Vs>
+            constexpr static decltype(auto) visit_variant(Visitor&& visitor, Vs&&... vs) {
+                return visit_alt(std::forward<Visitor>(visitor), std::forward<Vs>(vs).storage...);
+            }
+
+            template<typename Visitor, typename... Vs>
+            constexpr static decltype(auto) visit_value_at(std::size_t index, Visitor&& visitor, Vs&&... vs) {
+                return visit_variant_at(index, make_value_visitor(std::forward<Visitor>(visitor)), std::forward<Vs>(vs)...);
+            }
+
+            template<typename Visitor, typename... Vs>
+            constexpr static decltype(auto) visit_value(Visitor&& visitor, Vs&&... vs) {
+                return visit_variant(make_value_visitor(std::forward<Visitor>(visitor)), std::forward<Vs>(vs)...);
             }
         };
-
-        template<typename Visitor>
-        struct value_visitor {
-            std::remove_reference_t<Visitor> visitor;
-
-            value_visitor(Visitor&& v) : visitor(std::forward<Visitor>(v)) {}
-
-            template<typename... Alts>
-            constexpr decltype(auto) operator()(Alts&&... alts) const {
-                return visit_with_check<Visitor, decltype(std::forward<Alts>(alts).value)...>()(std::forward<Visitor>(visitor), std::forward<Alts>(alts).value...);
-            }
-        };
-
-        template<typename Visitor>
-        constexpr static decltype(auto) make_value_visitor(Visitor&& value) {
-            return value_visitor<Visitor>(std::forward<Visitor>(value));
-        }
-
-        template<typename Visitor, typename... Vs>
-        constexpr static decltype(auto) visit_variant_at(std::size_t index, Visitor&& visitor, Vs&&... vs) {
-            return visit_alt_at(index, std::forward<Visitor>(visitor), std::forward<Vs>(vs).storage...);
-        }
-
-        template<typename Visitor, typename... Vs>
-        constexpr static decltype(auto) visit_variant(Visitor&& visitor, Vs&&... vs) {
-            return visit_alt(std::forward<Visitor>(visitor), std::forward<Vs>(vs)...);
-        }
-
-        template<typename Visitor, typename... Vs>
-        constexpr static decltype(auto) visit_value_at(std::size_t index, Visitor&& visitor, Vs&&... vs) {
-            return visit_variant_at(index, make_value_visitor(std::forward<Visitor>(visitor)), std::forward<Vs>(vs)...);
-        }
-
-        template<typename Visitor, typename... Vs>
-        constexpr static decltype(auto) visit_value(Visitor&& visitor, Vs&&... vs) {
-            return visit_alt(make_value_visitor(std::forward<Visitor>(visitor)), std::forward<Vs>(vs)...);
-        }
-
 
     } // end visitor
 
@@ -765,8 +783,13 @@ namespace details {
             template<std::size_t I, typename... As>
             decltype(auto) emplace(As... args) {
                 this->destroy();
-                return this->indx = I,
+                try {
+                    return this->indx = I,
                        this->construct_alternative(access::storage_base_helper::get_alternative<I>(*this), std::forward<As>(args)...);
+                } catch (...) {
+                    this->indx = variant_npos;
+                    throw;
+                }
             }
 
             template<std::size_t I, typename T, typename A>
@@ -774,11 +797,17 @@ namespace details {
                 if (this->indx == I) {
                     a.value = std::forward<A>(arg);
                 } else {
-                    if constexpr (std::is_nothrow_constructible_v<T, A> ||
-                                  !std::is_nothrow_move_constructible_v<T>) {
-                        this->emplace<I>(std::forward<A>(arg));
-                    } else {
-                        this->emplace<I>(T(std::forward<A>(arg)));
+                    this->indx = variant_npos;
+                    try {
+                        if constexpr (std::is_nothrow_constructible_v<T, A> ||
+                                      !std::is_nothrow_move_constructible_v<T>) {
+                            this->emplace<I>(std::forward<A>(arg));
+                        } else {
+                            this->emplace<I>(T(std::forward<A>(arg)));
+                        }
+                    } catch (...) {
+                        this->indx = variant_npos;
+                        throw;
                     }
                 }
             }
@@ -887,12 +916,50 @@ namespace details {
 
             storage_t& operator =(storage_t const&) = default;
             storage_t& operator =(storage_t&&) = default;
+
+            inline void swap(storage_t &other) {
+                    if (this->valueless_by_exception() && other.valueless_by_exception()) {
+                      // do nothing.
+                    } else if (this->index() == other.index()) {
+                      visitor::visit_alt_at(this->index(), [](auto &a, auto &b) { std::swap(a.value,b.value); }, *this, other);
+                    } else {
+                      storage_t *lhs = this;
+                      storage_t *rhs = &other;
+
+                      if ((lhs->valueless_by_exception() || std::array<bool, sizeof...(Ts)>{{std::is_nothrow_move_constructible<Ts>::value...}}[lhs->index()]) &&
+                          !(rhs->valueless_by_exception() || std::array<bool, sizeof...(Ts)>{{std::is_nothrow_move_constructible<Ts>::value...}}[rhs->index()])) {
+                            std::swap(lhs, rhs);
+                      }
+
+                      storage_t tmp(std::move(*rhs));
+
+                      try {
+                        this->construct(*rhs, std::move(*lhs));
+                      } catch (...) {
+                          if (tmp.valueless_by_exception() || std::array<bool, sizeof...(Ts)>{{std::is_nothrow_move_constructible<Ts>::value...}}[tmp.index()]) {
+                              this->construct(*rhs, std::move(tmp));
+                          }
+                          throw;
+                      }
+
+                      this->construct(*lhs, std::move(tmp));
+                    }
+            }
+
         };
 } // storage end
 
 } // details end
 
 /////////////////////////////////////////////////////// Non-member functions //////////////////////////////////////////////////////////////////////////
+
+template <class Visitor, class... Variants>
+constexpr decltype(auto) visit(Visitor&& vis, Variants&&... vars) {
+    return details::visitor::variant_helper::visit_value(std::forward<Visitor>(vis), std::forward<Variants>(vars)...);
+}
+
+
+/////////////////////////////////////////////////////////////////////////
 
 template <typename T, typename... Ts>
 constexpr bool holds_alternative(variant<Ts...> const& v) noexcept {
@@ -902,9 +969,162 @@ constexpr bool holds_alternative(variant<Ts...> const& v) noexcept {
 /////////////////////////////////////////////////////////////////////////
 
 
+template <std::size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>>& get(variant<Types...>& v) {
+    if (v.index() == I)
+        return details::access::variant_helper::get_alternative<I>(v).value;
+//    throw bad_variant_access();
+}
+
+template <std::size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>>&& get(variant<Types...>&& v) {
+    if (v.index() == I)
+        return details::access::variant_helper::get_alternative<I>(std::move(v)).value;
+//    throw bad_variant_access();
+}
+
+template <std::size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>> const& get(variant<Types...> const& v) {
+    if (v.index() == I)
+        return details::access::variant_helper::get_alternative<I>(v).value;
+//    throw bad_variant_access();
+}
+
+template <std::size_t I, class... Types>
+constexpr variant_alternative_t<I, variant<Types...>> const&& get(variant<Types...> const&& v) {
+    if (v.index() == I)
+        return details::access::variant_helper::get_alternative<I>(std::move<variant<Types...>>(v)).value;
+//    throw bad_variant_access();
+}
+
+///
+
+template <class T, class... Types, std::size_t I = details::get_id_at_v<T, Types...>>
+constexpr T& get(variant<Types...>& v) {
+//    std::cout << I << std::endl;
+    return get<I>(v);
+//    return details::access::variant_helper::get_alternative<I>(v).value;
+}
+
+template <class T, class... Types, std::size_t I = details::get_id_at_v<T, Types...>>
+constexpr T&& get(variant<Types...>&& v) {
+    return get<I>(std::move(v));
+//    return details::access::variant_helper::get_alternative<I>(std::move(v)).value;
+}
+
+template <class T, class... Types, std::size_t I = details::get_id_at_v<T, Types...>>
+constexpr const T& get(variant<Types...> const& v) {
+    return get<I>(v);
+//    return details::access::variant_helper::get_alternative<I>(v).value;
+}
+
+template <class T, class... Types, std::size_t I = details::get_id_at_v<T, Types...>>
+constexpr const T&& get(variant<Types...> const&& v) {
+    return get<I>(std::move(v));
+//    return details::access::variant_helper::get_alternative<I>(std::move<variant<Types...>>(v)).value;
+}
+
+
+/////////////////////////////////////////////////////////////////////////
+
+template <std::size_t I, class... Types>
+constexpr std::add_pointer_t<variant_alternative_t<I, variant<Types...>>> get_if(variant<Types...>* pv) noexcept {
+    if (!pv) return nullptr;
+    if (pv->index() == I) {
+        return &details::access::variant_helper::get_alternative<I>(*pv).value;
+    }
+    return nullptr;
+}
+
+template <std::size_t I, class... Types>
+constexpr std::add_pointer_t<const variant_alternative_t<I, variant<Types...>>> get_if(const variant<Types...>* pv) noexcept {
+    if (!pv) return nullptr;
+    if (pv->index() == I) {
+        return &details::access::variant_helper::get_alternative<I>(*pv).value;
+    }
+    return nullptr;
+}
+
+template <class T, class... Types>
+constexpr std::add_pointer_t<T> get_if(variant<Types...>* pv) noexcept {
+    constexpr std::size_t I = details::get_id_at_v<T, Types...>;
+    if (!pv) return nullptr;
+    if (pv->index() == I) {
+        return &details::access::variant_helper::get_alternative<I>(*pv).value;
+    }
+    return nullptr;
+}
+
+template <class T, class... Types>
+constexpr std::add_pointer_t<const T> get_if(const variant<Types...>* pv) noexcept {
+    constexpr std::size_t I = details::get_id_at_v<T, Types...>;
+    if (!pv) return nullptr;
+    if (pv->index() == I) {
+        return &details::access::variant_helper::get_alternative<I>(*pv).value;
+    }
+    return nullptr;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+template <class... Types>
+constexpr bool operator==(const variant<Types...>& v, const variant<Types...>& w) {
+    if (v.index()!= w.index()) return false;
+    if (v.valueless_by_exception()) return true;
+    return get<v.index()>(v) == get<v.index()>(w);
+}
+
+template <class... Types>
+constexpr bool operator!=(const variant<Types...>& v, const variant<Types...>& w) {
+    if (v.index() != w.index()) return true;
+    if (v.valueless_by_exception()) return false;
+    return get<v.index()>(v) != get<v.index()>(w);
+}
+
+template <class... Types>
+constexpr bool operator<(const variant<Types...>& v, const variant<Types...>& w) {
+    if (w.valueless_by_exception()) return false;
+    if (v.valueless_by_exception()) return true;
+    if (v.index() < w.index()) return true;
+    if (v.index() > w.index()) return false;
+    return std::get<v.index()>(v) < std::get<v.index()>(w);
+}
+
+template <class... Types>
+constexpr bool operator>(const variant<Types...>& v, const variant<Types...>& w) {
+    if (v.valueless_by_exception()) return true;
+    if (w.valueless_by_exception()) return false;
+    if (v.index() < w.index()) return false;
+    if (v.index() > w.index()) return true;
+    return std::get<v.index()>(v) > std::get<v.index()>(w);
+}
+
+template <class... Types>
+constexpr bool operator<=(const variant<Types...>& v, const variant<Types...>& w) {
+    if (v.valueless_by_exception()) return true;
+    if (w.valueless_by_exception()) return false;
+    if (v.index() < w.index()) return true;
+    if (v.index() > w.index()) return false;
+    return get<v.index()>(v) <= get<v.index()>(w);
+}
+
+template <class... Types>
+constexpr bool operator>=(const variant<Types...>& v, const variant<Types...>& w) {
+    if (w.valueless_by_exception()) return true;
+    if (v.valueless_by_exception()) return false;
+    if (v.index() > w.index()) return true;
+    if (v.index() < w.index()) return false;
+    return get<v.index()>(v) >= get<v.index()>(w);
+}
+
+//////////////////////////////////////////////////////////////
+
+template <class... Types>
+void swap(variant<Types...>& lhs, variant<Types...>& rhs) noexcept(noexcept(lhs.swap(rhs))) {
+    lhs.swap(rhs);
+}
 
 /////////////////////////////////////////////////////// END Non-member functions //////////////////////////////////////////////////////////////////////////
-
 
 
 template<typename... Ts>
@@ -991,6 +1211,33 @@ struct variant {
 
 ////////////////////////////// END Assignment ////////////////////////////////////////////////////////
 
+
+    template <class T, class... Args,
+              std::size_t I = details::get_id_at_v<T, Ts...>,
+              std::enable_if_t<std::is_constructible_v<T, Args...>>* = nullptr>
+    T& emplace(Args&&... args) {
+        return storage.template emplace<I>(std::forward<Args>(args)...);
+    }
+
+    template <class T, class U, class... Args,
+              std::size_t I = details::get_id_at_v<T, Ts...>,
+              std::enable_if_t<std::is_constructible_v<T, std::initializer_list<U>&, Args...>>* = nullptr>
+    T& emplace(std::initializer_list<U> il, Args&&... args) {
+        storage.template emplace<I>(il, std::forward<Args>(args)...);
+    }
+
+    template <size_t I, class... Args,
+              std::enable_if_t<std::is_constructible_v<details::get_type_at_t<I, Ts...>, Args...>>* = nullptr>
+    variant_alternative_t<I, variant>& emplace(Args&&... args) {
+        storage.template emplace<I>(std::forward<Args>(args)...);
+    }
+
+    template <size_t I, class U, class... Args,
+              std::enable_if_t<std::is_constructible_v<details::get_type_at_t<I, Ts...>, std::initializer_list<U>&, Args...>>* = nullptr>
+    variant_alternative_t<I, variant>& emplace(std::initializer_list<U> il, Args&&... args) {
+        storage.template emplace<I>(il, std::forward<Args>(args)...);
+    }
+
     constexpr std::size_t index() const noexcept {
         return storage.index();
     }
@@ -999,12 +1246,17 @@ struct variant {
         return storage.valueless_by_exception();
     }
 
-    constexpr std::size_t size() const {
+    constexpr static std::size_t size() {
         return sizeof...(Ts);
     }
 
+    void swap(variant& rhs ) noexcept(((std::is_nothrow_move_constructible_v<Ts> &&
+                                         std::is_nothrow_swappable_v<Ts>) && ...)) {
+        storage.swap(rhs.storage);
+    }
 
-
+    friend struct details::access::variant_helper;
+    friend struct details::visitor::variant_helper;
 private:
 
     details::storage::storage_t<Ts...> storage;
