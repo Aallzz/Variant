@@ -319,12 +319,12 @@ namespace details {
             };
 
             template<typename... Fs, typename res_t = std::array<std::common_type_t<std::decay_t<Fs>...>, sizeof...(Fs)>>
-            constexpr static res_t make_farray(Fs&&... fs) {
+            constexpr static res_t functional_array_factory(Fs&&... fs) {
                 return res_t{{std::forward<Fs>(fs)...}};
             }
 
             template<typename F, typename... Vs, std::size_t... Is>
-            constexpr static auto make_visit(std::index_sequence<Is...>) {
+            constexpr static auto visit_factory(std::index_sequence<Is...>) {
                 return visit_agency<Is...>::template visitor<F, Vs...>::visit;
             }
 
@@ -341,51 +341,51 @@ namespace details {
             };
 
             template<std::size_t I, typename F, typename... Vs>
-            constexpr static auto make_fdiagonal_impl() {
-                return make_visit<F, Vs...>(std::index_sequence<wrap_pair<I, Vs>::value...>());
+            constexpr static auto functional_line_factory_impl() {
+                return visit_factory<F, Vs...>(std::index_sequence<wrap_pair<I, Vs>::value...>());
             }
 
             template<typename F, typename... Vs, std::size_t... Is>
-            constexpr static auto make_fdiagonal_impl(std::index_sequence<Is...>) {
-                return make_farray(make_fdiagonal_impl<Is, F, Vs...>()...);
+            constexpr static auto functional_line_factory_impl(std::index_sequence<Is...>) {
+                return functional_array_factory(functional_line_factory_impl<Is, F, Vs...>()...);
             }
 
             template<typename F, typename V, typename... Vs>
-            constexpr static decltype(auto) make_fdiagonal() {
+            constexpr static decltype(auto) functional_line_factory() {
                 static_assert((std::is_same_v<std::integral_constant<std::size_t, std::decay_t<V>::size()>, std::integral_constant<std::size_t, std::decay_t<Vs>::size()>> && ...), "all of the variants must be the same size.");
-                return make_fdiagonal_impl<F, V, Vs...>(std::make_index_sequence<std::decay_t<V>::size()>{});
+                return functional_line_factory_impl<F, V, Vs...>(std::make_index_sequence<std::decay_t<V>::size()>{});
             }
 
             template<typename F, typename... Vs, typename Is>
-            constexpr static auto make_f_matrix_impl(Is is) {
-                return make_visit<F, Vs...>(is);
+            constexpr static auto functional_matrix_factory_impl(Is is) {
+                return visit_factory<F, Vs...>(is);
             }
 
             template<typename F, typename... Vs, std::size_t... Is, std::size_t... IAs, typename... RestIS>
-            constexpr static auto make_f_matrix_impl(std::index_sequence<Is...>, std::index_sequence<IAs...>, RestIS... rest) {
+            constexpr static auto functional_matrix_factory_impl(std::index_sequence<Is...>, std::index_sequence<IAs...>, RestIS... rest) {
 //                print_size_as_warning<sizeof...(RestIS)>()();
-                return make_farray(make_f_matrix_impl<F, Vs...>(std::index_sequence<Is..., IAs>{}, rest...)...);
+                return functional_array_factory(functional_matrix_factory_impl<F, Vs...>(std::index_sequence<Is..., IAs>{}, rest...)...);
             }
 
 
             template<typename F, typename... Vs>
-            constexpr static decltype(auto) make_fmatrix() {
-                return make_f_matrix_impl<F, Vs...>(std::index_sequence<>(), std::make_index_sequence<std::decay_t<Vs>::size()>{}...);
+            constexpr static decltype(auto) functional_matrix_factory() {
+                return functional_matrix_factory_impl<F, Vs...>(std::index_sequence<>(), std::make_index_sequence<std::decay_t<Vs>::size()>{}...);
             }
 
         };
 
         template <typename F, typename... Vs>
-        struct fdiagonal {
-            using type = decltype(storage_base_helper::make_fdiagonal<F, Vs...>());
-            static constexpr type value = storage_base_helper::make_fdiagonal<F, Vs...>();
+        struct functional_line {
+            using type = decltype(storage_base_helper::functional_line_factory<F, Vs...>());
+            static constexpr type value = storage_base_helper::functional_line_factory<F, Vs...>();
         };
 
         /// Создает N-мерную "кубичискую" матрицу, длина "стороны" которой varaint::size()
         template <typename F, typename... Vs>
-        struct fmatrix {
-            using type = decltype(storage_base_helper::make_fmatrix<F, Vs...>());
-            static constexpr type value = storage_base_helper::make_fmatrix<F, Vs...>();
+        struct functional_matrix {
+            using type = decltype(storage_base_helper::functional_matrix_factory<F, Vs...>());
+            static constexpr type value = storage_base_helper::functional_matrix_factory<F, Vs...>();
         };
 
         ////////////////////////////////////////////////////////////////////
@@ -403,14 +403,14 @@ namespace details {
         ///
 
         template<typename Visitor, typename... Vs>
-        constexpr static decltype(auto) visit_alt_at(std::size_t index, Visitor&& visitor, Vs&&... vs) {
-            return storage_base_helper::at(fdiagonal<Visitor&&, decltype(std::forward<Vs>(vs))...>::value, index)
+        constexpr static decltype(auto) visit_alternativeernative_at(std::size_t index, Visitor&& visitor, Vs&&... vs) {
+            return storage_base_helper::at(functional_line<Visitor&&, decltype(std::forward<Vs>(vs))...>::value, index)
                                          (std::forward<Visitor>(visitor), std::forward<Vs>(vs)...);
         }
 
         template<typename Visitor, typename... Vs>
-        constexpr static decltype(auto) visit_alt(Visitor&& visitor, Vs&&... vs) {
-            auto x = storage_base_helper::at(fmatrix<Visitor&&, decltype(std::forward<Vs>(vs))...>::value, vs.index()...);
+        constexpr static decltype(auto) visit_alternative(Visitor&& visitor, Vs&&... vs) {
+            auto x = storage_base_helper::at(functional_matrix<Visitor&&, decltype(std::forward<Vs>(vs))...>::value, vs.index()...);
             return x(std::forward<Visitor>(visitor), std::forward<Vs>(vs)...);
         }
 
@@ -418,8 +418,7 @@ namespace details {
         struct variant_helper {
 
             template<typename Visitor, typename... Vs>                                                                                                                        \
-            struct visit_with_check {
-                //static_assect(chech_invoke, "impossible to invoke");
+            struct variant_functional_object {
                 constexpr decltype(auto) operator()(Visitor&& visitor, Vs&&... values) const {
                     return std::invoke(std::forward<Visitor>(visitor), std::forward<Vs>(values)...);
                 }
@@ -427,43 +426,43 @@ namespace details {
 
 
             template<typename Visitor>
-            struct value_visitor {
+            struct variant_functional_helper {
                 Visitor&& visitor;
 
-                constexpr value_visitor(Visitor&& v) : visitor(std::forward<Visitor>(v)) {}
+                constexpr variant_functional_helper(Visitor&& v) : visitor(std::forward<Visitor>(v)) {}
 
                 template<typename... Alts>
                 constexpr decltype(auto) operator()(Alts&&... alts) const {
-                    return visit_with_check<Visitor,
+                    return variant_functional_object<Visitor,
                                             decltype((std::forward<Alts>(alts).value))...
                             >()(std::forward<Visitor>(visitor), std::forward<Alts>(alts).value...);
                 }
             };
 
             template<typename Visitor>
-            constexpr static decltype(auto) make_value_visitor(Visitor&& value) {
-                return value_visitor<Visitor>(std::forward<Visitor>(value));
+            constexpr static decltype(auto) variant_functional_helper_factory(Visitor&& value) {
+                return variant_functional_helper<Visitor>(std::forward<Visitor>(value));
             }
 
 
             template<typename Visitor, typename... Vs>
             constexpr static decltype(auto) visit_variant_at(std::size_t index, Visitor&& visitor, Vs&&... vs) {
-                return visit_alt_at(index, std::forward<Visitor>(visitor), std::forward<Vs>(vs).storage...);
+                return visit_alternativeernative_at(index, std::forward<Visitor>(visitor), std::forward<Vs>(vs).storage...);
             }
 
             template<typename Visitor, typename... Vs>
             constexpr static decltype(auto) visit_variant(Visitor&& visitor, Vs&&... vs) {
-                return visit_alt(std::forward<Visitor>(visitor), std::forward<Vs>(vs).storage...);
+                return visit_alternative(std::forward<Visitor>(visitor), std::forward<Vs>(vs).storage...);
             }
 
             template<typename Visitor, typename... Vs>
             constexpr static decltype(auto) visit_value_at(std::size_t index, Visitor&& visitor, Vs&&... vs) {
-                return visit_variant_at(index, make_value_visitor(std::forward<Visitor>(visitor)), std::forward<Vs>(vs)...);
+                return visit_variant_at(index, variant_functional_helper_factory(std::forward<Visitor>(visitor)), std::forward<Vs>(vs)...);
             }
 
             template<typename Visitor, typename... Vs>
             constexpr static decltype(auto) visit_value(Visitor&& visitor, Vs&&... vs) {
-                return visit_variant(make_value_visitor(std::forward<Visitor>(visitor)), std::forward<Vs>(vs)...);
+                return visit_variant(variant_functional_helper_factory(std::forward<Visitor>(visitor)), std::forward<Vs>(vs)...);
             }
         };
 
@@ -660,7 +659,7 @@ namespace details {
 
             constexpr void destroy() {
                 if (!this->valueless_by_exception()) {
-                    visitor::visit_alt([](auto& value){using type = std::remove_reference_t<decltype(value)>; value.~type();}, *this);
+                    visitor::visit_alternative([](auto& value){using type = std::remove_reference_t<decltype(value)>; value.~type();}, *this);
                 }
                 this->indx = variant_npos;
             }
@@ -693,7 +692,7 @@ namespace details {
             static void construct(storage_constructor_part& where, T&& what) {
                 where.destroy();
                 if (!what.valueless_by_exception()) {
-                    visitor::visit_alt_at(what.index(),
+                    visitor::visit_alternativeernative_at(what.index(),
                                           [](auto& where_alt, auto&& what_alt) {
                                               storage_constructor_part::construct_alternative(where_alt, std::forward<decltype(what_alt)>(what_alt).value);
                                           },
@@ -819,7 +818,7 @@ namespace details {
                     this->destroy();
                     return ;
                 }
-                visitor::visit_alt_at(rhs.index(),
+                visitor::visit_alternativeernative_at(rhs.index(),
                                       [this](auto& rhs, auto&& lhs) {
                                           this->assign_alternative(rhs, std::forward<decltype(lhs)>(lhs).value);
                                       }, *this, std::forward<T>(rhs));
@@ -921,7 +920,7 @@ namespace details {
                     if (this->valueless_by_exception() && other.valueless_by_exception()) {
                       // do nothing.
                     } else if (this->index() == other.index()) {
-                      visitor::visit_alt_at(this->index(), [](auto &a, auto &b) { std::swap(a.value,b.value); }, *this, other);
+                      visitor::visit_alternativeernative_at(this->index(), [](auto &a, auto &b) { std::swap(a.value,b.value); }, *this, other);
                     } else {
                       storage_t *lhs = this;
                       storage_t *rhs = &other;
@@ -973,28 +972,32 @@ template <std::size_t I, class... Types>
 constexpr variant_alternative_t<I, variant<Types...>>& get(variant<Types...>& v) {
     if (v.index() == I)
         return details::access::variant_helper::get_alternative<I>(v).value;
-//    throw bad_variant_access();
+    else
+        throw bad_variant_access();
 }
 
 template <std::size_t I, class... Types>
 constexpr variant_alternative_t<I, variant<Types...>>&& get(variant<Types...>&& v) {
     if (v.index() == I)
         return details::access::variant_helper::get_alternative<I>(std::move(v)).value;
-//    throw bad_variant_access();
+    else
+        throw bad_variant_access();
 }
 
 template <std::size_t I, class... Types>
 constexpr variant_alternative_t<I, variant<Types...>> const& get(variant<Types...> const& v) {
     if (v.index() == I)
         return details::access::variant_helper::get_alternative<I>(v).value;
-//    throw bad_variant_access();
+    else
+        throw bad_variant_access();
 }
 
 template <std::size_t I, class... Types>
 constexpr variant_alternative_t<I, variant<Types...>> const&& get(variant<Types...> const&& v) {
     if (v.index() == I)
         return details::access::variant_helper::get_alternative<I>(std::move<variant<Types...>>(v)).value;
-//    throw bad_variant_access();
+    else
+        throw bad_variant_access();
 }
 
 ///
@@ -1032,8 +1035,8 @@ constexpr std::add_pointer_t<variant_alternative_t<I, variant<Types...>>> get_if
     if (!pv) return nullptr;
     if (pv->index() == I) {
         return &details::access::variant_helper::get_alternative<I>(*pv).value;
-    }
-    return nullptr;
+    } else
+        return nullptr;
 }
 
 template <std::size_t I, class... Types>
@@ -1041,8 +1044,8 @@ constexpr std::add_pointer_t<const variant_alternative_t<I, variant<Types...>>> 
     if (!pv) return nullptr;
     if (pv->index() == I) {
         return &details::access::variant_helper::get_alternative<I>(*pv).value;
-    }
-    return nullptr;
+    } else
+        return nullptr;
 }
 
 template <class T, class... Types>
@@ -1051,8 +1054,8 @@ constexpr std::add_pointer_t<T> get_if(variant<Types...>* pv) noexcept {
     if (!pv) return nullptr;
     if (pv->index() == I) {
         return &details::access::variant_helper::get_alternative<I>(*pv).value;
-    }
-    return nullptr;
+    } else
+        return nullptr;
 }
 
 template <class T, class... Types>
@@ -1061,8 +1064,8 @@ constexpr std::add_pointer_t<const T> get_if(const variant<Types...>* pv) noexce
     if (!pv) return nullptr;
     if (pv->index() == I) {
         return &details::access::variant_helper::get_alternative<I>(*pv).value;
-    }
-    return nullptr;
+    } else
+        return nullptr;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
